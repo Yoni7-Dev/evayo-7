@@ -20,7 +20,7 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'https://evayo-7.onrender.com/api/products/',
+  origin: process.env.CLIENT_URL || 'https://evayo-7.onrender.com/',
   credentials: true
 }));
 app.use(express.json());
