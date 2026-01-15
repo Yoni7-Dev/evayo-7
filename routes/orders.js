@@ -311,7 +311,6 @@
 // module.exports = router;
 
 
-
 /**
  * Orders Routes
  * CRUD operations for orders
@@ -327,6 +326,117 @@ const { protect, adminOnly } = require('../middleware/auth');
 const generateOrderNumber = () => {
   return 'EVY-' + Math.random().toString(36).substring(2, 8).toUpperCase();
 };
+
+// ⭐ MANUAL SALE ENDPOINT - MUST BE FIRST!
+// @route   POST /api/orders/manual-sale
+// @desc    Admin create manual sale (not from customer order)
+// @access  Private/Admin
+router.post('/manual-sale', protect, adminOnly, [
+  body('customer_name').trim().notEmpty().withMessage('Customer name is required'),
+  body('items').isArray({ min: 1 }).withMessage('Sale must have at least one item'),
+  body('paymentMethod').isIn(['cash', 'bank', 'mobile']).withMessage('Invalid payment method'),
+  body('total').isNumeric().withMessage('Total must be a number')
+], async (req, res) => {
+  console.log('✅ Manual sale endpoint called!');
+  console.log('User:', req.user.id, 'Role:', req.user.role);
+  console.log('Body:', req.body);
+  
+  const connection = await db.getConnection();
+  
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log('❌ Validation errors:', errors.array());
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    await connection.beginTransaction();
+
+    const {
+      customer_name,
+      items,
+      subtotal,
+      discountAmount,
+      deliveryFee,
+      total,
+      paymentMethod,
+      notes
+    } = req.body;
+
+    const orderNumber = generateOrderNumber();
+
+    console.log('📝 Creating order:', { orderNumber, customer_name, total });
+
+    // Create order (manual sale)
+    const [orderResult] = await connection.query(
+      `INSERT INTO orders (
+        order_number, user_id, customer_name, customer_email, customer_phone,
+        subtotal, discount_amount, delivery_fee, total,
+        status, delivery_type, payment_method, estimated_delivery
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        orderNumber,
+        req.user.id,
+        customer_name,
+        '',
+        '',
+        subtotal || total,
+        discountAmount || 0,
+        deliveryFee || 0,
+        total,
+        'delivered',
+        'pickup',
+        paymentMethod,
+        'Completed'
+      ]
+    );
+
+    const orderId = orderResult.insertId;
+    console.log('✅ Order created:', orderId);
+
+    // Insert order items
+    for (const item of items) {
+      console.log('📦 Adding item:', item.name);
+      await connection.query(
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          orderId, 
+          item.id, 
+          item.name, 
+          item.quantity, 
+          item.finalPrice, 
+          item.finalPrice * item.quantity
+        ]
+      );
+    }
+
+    // Insert status history
+    await connection.query(
+      'INSERT INTO order_status_history (order_id, status, message) VALUES (?, ?, ?)',
+      [orderId, 'delivered', 'Manual sale recorded by admin']
+    );
+
+    await connection.commit();
+
+    console.log('✅ Sale recorded successfully!');
+    res.status(201).json({
+      success: true,
+      message: 'Sale recorded successfully',
+      data: {
+        id: orderId,
+        orderNumber,
+        status: 'delivered'
+      }
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error('❌ Create manual sale error:', error);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  } finally {
+    connection.release();
+  }
+});
 
 // @route   GET /api/orders
 // @desc    Get all orders (admin) or user's orders
